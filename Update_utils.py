@@ -94,3 +94,53 @@ result_columns = [
     "affected_section",
     "improvement_suggestion"
 ]
+
+
+
+
+def sanitize_json_string(json_str):
+    try:
+        # First attempt to parse as is - might already be valid
+        json.loads(json_str)
+        return json_str
+    except:
+        # If parsing fails, try to fix common issues
+        pass
+    
+    # Handle common JSON issues
+    try:
+        # Replace problematic escape sequences
+        temp_str = json_str
+        
+        # Fix common escape sequence issues
+        temp_str = temp_str.replace('\\', '\\\\')  # Double all backslashes first
+        temp_str = temp_str.replace('\\\\\"', '\\"')  # Fix double escaped quotes
+        temp_str = temp_str.replace('\\\\n', '\\n')  # Fix double escaped newlines
+        
+        # Remove any control characters
+        temp_str = ''.join(ch for ch in temp_str if ord(ch) >= 32 or ch in '\n\r\t')
+        
+        # Try to parse the sanitized string
+        json.loads(temp_str)
+        return temp_str
+    except:
+        # If still failing, try a more aggressive approach
+        pass
+    
+    # More aggressive sanitization
+    try:
+        # Extract what looks like JSON using regex
+        import re
+        json_pattern = r'(\{.*\})'
+        match = re.search(json_pattern, json_str, re.DOTALL)
+        if match:
+            potential_json = match.group(1)
+            # Try to parse
+            json.loads(potential_json)
+            return potential_json
+    except:
+        pass
+    
+    # If all else fails, return a valid but empty JSON
+    return '{}'
+
