@@ -1,4 +1,106 @@
 # 1. Update your system message function
+
+def sanitize_json_string(json_str):
+    # First, let's try to identify if we have a JSON-like structure
+    if not (json_str.strip().startswith('{') and json_str.strip().endswith('}')):
+        print("Input doesn't appear to be JSON format")
+        return '{}'
+    
+    try:
+        # Try direct parsing first
+        return json_str
+    except:
+        pass
+    
+    # Manual JSON field extraction and cleaning
+    cleaned_json = {}
+    
+    # Extract each field individually using regex
+    import re
+    
+    # Extract predicted_label
+    label_match = re.search(r'"predicted_label"\s*:\s*"([^"]*)"', json_str)
+    if label_match:
+        cleaned_json["predicted_label"] = label_match.group(1)
+    else:
+        cleaned_json["predicted_label"] = "unknown"
+    
+    # Extract emotion_summary
+    emotion_match = re.search(r'"emotion_summary"\s*:\s*"([^"]*)"', json_str)
+    if emotion_match:
+        cleaned_json["emotion_summary"] = emotion_match.group(1)
+    else:
+        cleaned_json["emotion_summary"] = "Neutral"
+    
+    # Extract emotion_confidence
+    confidence_match = re.search(r'"emotion_confidence"\s*:\s*([\d\.]+)', json_str)
+    if confidence_match:
+        cleaned_json["emotion_confidence"] = float(confidence_match.group(1))
+    else:
+        cleaned_json["emotion_confidence"] = 0.5
+    
+    # Extract rationale (this is trickier due to quotes)
+    rationale_start = json_str.find('"rationale"')
+    if rationale_start != -1:
+        # Find the colon after "rationale"
+        colon_pos = json_str.find(':', rationale_start)
+        if colon_pos != -1:
+            # Find the first quote after the colon
+            first_quote = json_str.find('"', colon_pos)
+            if first_quote != -1:
+                # Find the closing quote (this is tricky with nested quotes)
+                # Look for a quote followed by a comma or closing brace
+                rationale_end = -1
+                for i in range(first_quote + 1, len(json_str)):
+                    if json_str[i] == '"' and (i+1 < len(json_str) and (json_str[i+1] == ',' or json_str[i+1] == '}')):
+                        rationale_end = i
+                        break
+                
+                if rationale_end != -1:
+                    # Extract the rationale text
+                    rationale_text = json_str[first_quote+1:rationale_end]
+                    # Clean it up (remove problematic characters)
+                    rationale_text = rationale_text.replace('"', "'").replace('\\', '')
+                    cleaned_json["rationale"] = rationale_text
+    
+    if "rationale" not in cleaned_json:
+        cleaned_json["rationale"] = "No rationale provided"
+    
+    # Extract affected_section
+    section_match = re.search(r'"affected_section"\s*:\s*"([^"]*)"', json_str)
+    if section_match:
+        cleaned_json["affected_section"] = section_match.group(1)
+    else:
+        cleaned_json["affected_section"] = "unknown section"
+    
+    # Extract improvement_suggestion (similar to rationale)
+    improvement_start = json_str.find('"improvement_suggestion"')
+    if improvement_start != -1:
+        colon_pos = json_str.find(':', improvement_start)
+        if colon_pos != -1:
+            first_quote = json_str.find('"', colon_pos)
+            if first_quote != -1:
+                improvement_end = -1
+                for i in range(first_quote + 1, len(json_str)):
+                    if json_str[i] == '"' and (i+1 < len(json_str) and (json_str[i+1] == ',' or json_str[i+1] == '}')):
+                        improvement_end = i
+                        break
+                
+                if improvement_end != -1:
+                    improvement_text = json_str[first_quote+1:improvement_end]
+                    improvement_text = improvement_text.replace('"', "'").replace('\\', '')
+                    cleaned_json["improvement_suggestion"] = improvement_text
+    
+    if "improvement_suggestion" not in cleaned_json:
+        cleaned_json["improvement_suggestion"] = "No improvement suggestion provided"
+    
+    # Convert back to JSON string
+    import json
+    return json.dumps(cleaned_json)
+
+
+
+
 def get_system_message():
     delimiter = "####"
     
