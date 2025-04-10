@@ -70,6 +70,21 @@ def process_chunk(chunk_df):
     
     return chunk_results
 
+
+def sanitize_json_string(json_str):
+    # Replace escaped quotes with temporary placeholder
+    temp_str = json_str.replace('\\"', '___QUOTE___')
+    # Replace nested quotes in values with single quotes
+    temp_str = re.sub(r'": "([^"]*)"([^"]*)"([^"]*)"', r'": "\1\'\2\'\3"', temp_str)
+    # Restore escaped quotes
+    return temp_str.replace('___QUOTE___', '\\"')
+
+try:
+    sanitized_completion = sanitize_json_string(completion)
+    response_json = json.loads(sanitized_completion)
+    # Rest of your code...
+
+
 # 4. Add the new columns to your results dataframe in your main processing function
 result_columns = [
     "predicted_label",
