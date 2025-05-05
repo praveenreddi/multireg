@@ -1,5 +1,107 @@
 # 1. Update your system message function
 # Install required libraries if not already installed
+# Install required library
+!pip install jira
+
+from jira import JIRA
+import pandas as pd
+from pyspark.sql import SparkSession
+
+# Create Spark session
+spark = SparkSession.builder.appName("JiraDataExtraction").getOrCreate()
+
+# Jira connection parameters
+server = "https://itrack.web.att.com"
+username = dbutils.secrets.get(scope="jira_credentials", key="username")
+password = dbutils.secrets.get(scope="jira_credentials", key="password")
+
+# Connect to Jira
+jira = JIRA(server=server, basic_auth=(username, password))
+
+# Define the fields we want to fetch
+fields = ["status", "fixVersions", "customfield_10123"]  # Add the custom field ID for Scrum Team
+
+# Function to fetch all issues with pagination, only requesting specific fields
+def fetch_all_issues(batch_size=1000):
+    all_data = []
+    start_at = 0
+
+    print("Starting to fetch Jira tickets...")
+
+    while True:
+        # Fetch a batch of issues with only the fields we need
+        print(f"Fetching batch starting at position {start_at}...")
+        batch = jira.search_issues("ORDER BY key ASC", startAt=start_at, maxResults=batch_size, fields=fields)
+
+        # If no more issues, break the loop
+        if len(batch) == 0:
+            break
+
+        # Process each issue in the batch
+        for issue in batch:
+            # Get Key
+            key = issue.key
+
+            # Get Status
+            status = issue.fields.status.name
+
+            # Get Fix Versions
+            fix_versions = []
+            for version in issue.fields.fixVersions:
+                fix_versions.append(version.name)
+            fix_versions_str = ", ".join(fix_versions) if fix_versions else ""
+
+            # Get Scrum Team (custom field)
+            scrum_team = ""
+            team_field = getattr(issue.fields, 'customfield_10123', None)
+            if team_field and hasattr(team_field, 'value'):
+                scrum_team = team_field.value
+
+            # Add to data collection
+            all_data.append({
+                "Key": key,
+                "Status": status,
+                "Fix_Versions": fix_versions_str,
+                "Scrum_Team": scrum_team
+            })
+
+        # Update start position for next batch
+        start_at += len(batch)
+        print(f"Processed {start_at} issues so far")
+
+        # If batch is smaller than requested size, we've reached the end
+        if len(batch) < batch_size:
+            break
+
+    print(f"Completed fetching {len(all_data)} issues")
+    return all_data
+
+# Fetch all issues and process them directly
+data = fetch_all_issues()
+
+# Create DataFrame
+df = pd.DataFrame(data)
+
+# Convert to Spark DataFrame
+spark_df = spark.createDataFrame(df)
+
+# Save to Delta table
+spark_df.write.format("delta").mode("overwrite").saveAsTable("jira_tickets")
+
+# Save to CSV
+spark_df.toPandas().to_csv("/dbfs/FileStore/jira_tickets.csv", index=False)
+
+# Display sample
+print("Sample of fetched data:")
+display(spark_df.limit(10))
+
+print(f"Total tickets: {len(data)}")
+print("Data saved to Delta table 'jira_tickets' and CSV file '/dbfs/FileStore/jira_tickets.csv'")
+
+
+
+
+
 !pip install jira
 
 from jira import JIRA
