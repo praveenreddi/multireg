@@ -1,4 +1,103 @@
 # 1. Update your system message function
+# Install required libraries if not already installed
+!pip install jira
+
+from jira import JIRA
+import pandas as pd
+from pyspark.sql import SparkSession
+
+# Create a Spark session
+spark = SparkSession.builder.appName("JiraDataExtraction").getOrCreate()
+
+# Jira connection parameters
+server = "https://itrack.web.att.com"
+# For security, use Databricks secrets instead of hardcoding credentials
+username = dbutils.secrets.get(scope="jira_credentials", key="username")
+password = dbutils.secrets.get(scope="jira_credentials", key="password")
+
+# Connect to Jira
+jira = JIRA(server=server, basic_auth=(username, password))
+
+# JQL query to get all tickets
+# You can adjust this query as needed
+jql_query = "ORDER BY key DESC"
+
+# Function to fetch all issues with pagination
+def fetch_all_issues(jql, batch_size=1000):
+    issues = []
+    start_at = 0
+    
+    while True:
+        batch = jira.search_issues(jql, startAt=start_at, maxResults=batch_size)
+        if len(batch) == 0:
+            break
+            
+        issues.extend(batch)
+        start_at += len(batch)
+        print(f"Fetched {start_at} issues so far...")
+        
+        # If batch is smaller than batch_size, we've reached the end
+        if len(batch) < batch_size:
+            break
+            
+    return issues
+
+# Fetch all issues
+print("Fetching all Jira tickets, this may take some time...")
+all_issues = fetch_all_issues(jql_query)
+print(f"Total tickets fetched: {len(all_issues)}")
+
+# Extract required fields from each issue
+data = []
+for issue in all_issues:
+    # Extract fields
+    key = issue.key
+    status = issue.fields.status.name
+    
+    # Handle fix versions (may be multiple or none)
+    fix_versions = []
+    for version in issue.fields.fixVersions:
+        fix_versions.append(f"{version.name} ({version.releaseDate})" if hasattr(version, 'releaseDate') else version.name)
+    fix_versions_str = " - ".join(fix_versions) if fix_versions else ""
+    
+    # Get Scrum Team (custom field - adjust field ID as needed)
+    # You may need to inspect your Jira instance to get the correct field ID
+    scrum_team = getattr(issue.fields, 'customfield_10123', None)
+    if scrum_team and hasattr(scrum_team, 'value'):
+        scrum_team = scrum_team.value
+    
+    # Add more fields as needed
+    summary = issue.fields.summary
+    issue_type = issue.fields.issuetype.name
+    project = issue.fields.project.key
+    
+    data.append({
+        "Key": key,
+        "Summary": summary,
+        "Status": status,
+        "Issue_Type": issue_type,
+        "Project": project,
+        "Fix_Versions": fix_versions_str,
+        "Scrum_Team": scrum_team
+        # Add more fields as needed
+    })
+
+# Create DataFrame
+df = pd.DataFrame(data)
+
+# Convert to Spark DataFrame
+spark_df = spark.createDataFrame(df)
+
+# Save to Delta table or other format
+spark_df.write.format("delta").mode("overwrite").saveAsTable("all_jira_tickets")
+
+# Display sample data
+print("Sample of fetched tickets:")
+display(spark_df.limit(10))
+
+# Optionally export to CSV
+spark_df.toPandas().to_csv("/dbfs/FileStore/all_jira_tickets.csv", index=False)
+print("Data saved to CSV at /dbfs/FileStore/all_jira_tickets.csv")
 
 def sanitize_json_string(json_str):
     # First, let's try to identify if we have a JSON-like structure
