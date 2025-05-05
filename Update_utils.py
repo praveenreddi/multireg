@@ -1,6 +1,94 @@
 # 1. Update your system message function
 # Install required libraries if not already installed
 # Install required library
+# Install required libraries
+!pip install requests
+
+import requests
+import json
+import base64
+
+# Jira connection parameters
+server = "https://itrack.web.att.com"
+username = dbutils.secrets.get(scope="jira_credentials", key="username")
+password = dbutils.secrets.get(scope="jira_credentials", key="password")
+
+# Create basic auth header
+auth_str = f"{username}:{password}"
+auth_bytes = auth_str.encode('ascii')
+base64_bytes = base64.b64encode(auth_bytes)
+base64_auth = base64_bytes.decode('ascii')
+
+headers = {
+    "Authorization": f"Basic {base64_auth}",
+    "Content-Type": "application/json"
+}
+
+# Get a single issue to examine its structure
+url = f"{server}/rest/api/2/search"
+params = {
+    "jql": "ORDER BY key ASC",
+    "maxResults": 1
+}
+
+try:
+    # Make the API request
+    response = requests.get(url, headers=headers, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        
+        if 'issues' in data and len(data['issues']) > 0:
+            issue = data['issues'][0]
+            
+            # Print the issue key
+            print(f"Examining issue: {issue['key']}")
+            
+            # Print all available fields
+            print("\nAll available fields:")
+            for field_name, field_value in issue['fields'].items():
+                field_type = type(field_value).__name__
+                
+                # For complex objects, show a sample of their structure
+                if isinstance(field_value, dict):
+                    print(f"  {field_name} (dict): {json.dumps(field_value)[:100]}...")
+                elif isinstance(field_value, list):
+                    if field_value:
+                        print(f"  {field_name} (list): {json.dumps(field_value)[:100]}...")
+                    else:
+                        print(f"  {field_name} (empty list)")
+                else:
+                    print(f"  {field_name} ({field_type}): {str(field_value)[:100]}")
+            
+            # Look specifically for status field
+            if 'status' in issue['fields']:
+                print("\nStatus field structure:")
+                print(json.dumps(issue['fields']['status'], indent=2))
+            
+            # Look for fields that might contain "team" or "scrum"
+            print("\nPossible Scrum Team fields:")
+            for field_name, field_value in issue['fields'].items():
+                if field_name.lower().startswith('customfield_'):
+                    field_str = str(field_value).lower()
+                    if field_value and ('team' in field_str or 'scrum' in field_str):
+                        print(f"  {field_name}: {field_value}")
+            
+            # Look for fix versions
+            if 'fixVersions' in issue['fields']:
+                print("\nFix Versions field structure:")
+                print(json.dumps(issue['fields']['fixVersions'], indent=2))
+        else:
+            print("No issues found")
+    else:
+        print(f"Error: API returned status code {response.status_code}")
+        print(f"Response: {response.text}")
+        
+except Exception as e:
+    print(f"Error: {str(e)}")
+
+
+
+
 !pip install jira
 
 from jira import JIRA
