@@ -1,3 +1,101 @@
+import pandas as pd
+from langchain.llms import OpenAI
+from langchain.llms.base import LlamaLLM
+
+def analyze_code(application_name, cwe_id_name, file_name, line_number, code, code_context=""):
+    """
+    Constructs a prompt for vulnerability analysis
+    """
+    # Determine language from file extension
+    extension = file_name.split('.')[-1] if '.' in file_name else 'unknown'
+    language_map = {
+        'ts': 'TypeScript',
+        'js': 'JavaScript',
+        'py': 'Python',
+        'java': 'Java',
+        'cs': 'C#',
+        'php': 'PHP',
+        # Add more mappings as needed
+    }
+    language = language_map.get(extension, 'Unknown')
+    
+    prompt = f"""
+    As a security analyst, analyze this {language} code for the vulnerability {cwe_id_name}.
+    Application: {application_name}
+    File: {file_name}
+    Line number with potential issue: {line_number}
+    
+    CODE:
+    {code}
+    
+    {code_context}
+    
+    Focus on line {line_number} and determine if this is a true {cwe_id_name} vulnerability or a false positive.
+    If it's a vulnerability, provide specific mitigation steps.
+    
+    Is this a false positive? Answer with 'false positive' if it is not a real vulnerability.
+    If it is a real vulnerability, provide detailed mitigation steps.
+    """
+    
+    return prompt
+
+def main():
+    # Initialize LLM
+    llm = LlamaLLM(llm=OpenAI())
+    
+    # Read CSV file
+    data = pd.read_csv('vulnerabilities.csv')
+    
+    # Add prediction and mitigation columns if they don't exist
+    if 'Prediction' not in data.columns:
+        data['Prediction'] = ""
+    if 'Mitigation' not in data.columns:
+        data['Mitigation'] = ""
+    
+    # Process each row
+    for index, row in data.iterrows():
+        print(f"Processing {index+1}/{len(data)}: {row['ApplicationName']} - {row['CWE id and name']}")
+        
+        # Extract file name and line number from Source
+        source_parts = row['Source'].split(':')
+        file_name = source_parts[0]
+        line_number = source_parts[1] if len(source_parts) > 1 else "1"
+        
+        # Set default code context
+        code_context = "File not found. Unable to analyze the code."
+        
+        # Generate prompt
+        prompt = analyze_code(
+            row['ApplicationName'], 
+            row['CWE id and name'], 
+            file_name, 
+            line_number, 
+            row['Code'],
+            code_context
+        )
+        
+        # Get LLM response
+        gpt_response = llm._call(prompt)
+        
+        # Process response
+        if "false positive" in gpt_response.lower():
+            data.at[index, 'Prediction'] = "FP"
+        else:
+            data.at[index, 'Prediction'] = "Vulnerability"
+            data.at[index, 'Mitigation'] = gpt_response
+    
+    # Export to Excel
+    data.to_excel("Code_Snippet_vulns_Analysis.xlsx", index=False)
+    print("Analysis complete. Results saved to Code_Snippet_vulns_Analysis.xlsx")
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
 # 1. Update your system message function
 # Install required libraries if not already installed
 # Install required library
