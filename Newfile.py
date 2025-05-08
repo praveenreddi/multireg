@@ -1,3 +1,40 @@
+# Create a custom wrapper around the LLM to handle the response properly
+class SafeLLMWrapper:
+    def __init__(self, llm):
+        self.llm = llm
+    
+    def call(self, prompt):
+        try:
+            # Get the raw response
+            response = self.llm._call(prompt)
+            
+            # If it's already a string, return it directly
+            if isinstance(response, str):
+                return {"content": response}
+            
+            # If it's a dict with content, return it as is
+            if isinstance(response, dict) and 'content' in response:
+                return response
+                
+            # Otherwise, convert to a dict with content
+            return {"content": str(response)}
+            
+        except Exception as e:
+            print(f"Error in LLM call: {str(e)}")
+            return {"content": f"Error: {str(e)}"}
+
+# In your main code:
+llm = LlamaLLM(llm=OpenAI())
+safe_llm = SafeLLMWrapper(llm)
+
+# Then use safe_llm.call(prompt) instead of llm._call(prompt)
+response_dict = safe_llm.call(prompt)
+mitigation_text = response_dict["content"]
+
+
+
+
+
 import pandas as pd
 from langchain.llms import OpenAI
 from langchain.llms.base import LlamaLLM
