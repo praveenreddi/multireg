@@ -1,4 +1,270 @@
 import asyncio
+import sys
+import json
+import requests
+from typing import Any, List, Dict, Optional, Union, AsyncIterator
+from autogen_agentchat.agents import AssistantAgent, CodeExecutorAgent
+from autogen_agentchat.conditions import TextMentionTermination, MaxMessageTermination
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.ui import Console
+from autogen_ext.code_executors import LocalCommandLineCodeExecutor
+from autogen_core.models import ChatCompletionClient, LLMMessage, CreateResult, RequestUsage
+from autogen_core.models import UserMessage, AssistantMessage, SystemMessage
+
+# Your access token
+access_token = "your_access_token_here"
+
+def custom_llm(messages, **kwargs):
+    """Your existing custom LLM function - enhanced for tools"""
+    serializable_messages = []
+    for m in messages:
+        if isinstance(m, dict):
+            serializable_messages.append(m)
+        else:
+            serializable_messages.append({
+                "role": getattr(m, "role", "user"),
+                "content": getattr(m, "content", str(m))
+            })
+    
+    llm_url = "https://askattapis-orchestration-stage.dev.att.com/api/v1/askatt/question"
+    model = "gpt-4-32k"
+    
+    payload = json.dumps({
+        "domainName": "GenerativeAI",
+        "modelName": model,
+        "modelPayload": {
+            "messages": serializable_messages,
+            "temperature": 0,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "max_tokens": 800,
+            # Add tool support if tools are provided
+            **({"tools": kwargs.get("tools", [])} if kwargs.get("tools") else {})
+        }
+    })
+    
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    
+    response = requests.post(llm_url, headers=headers, data=payload)
+    
+    try:
+        data = response.json()
+        content = data["modelResult"]["choices"][0]["message"]["content"]
+        
+        # Handle tool calls if present
+        tool_calls = data["modelResult"]["choices"][0]["message"].get("tool_calls", [])
+        
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            "usage": data["modelResult"].get("usage", {"prompt_tokens": 10, "completion_tokens": 10})
+        }
+    except Exception:
+        return {
+            "content": response.text,
+            "tool_calls": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 10}
+        }
+
+class CustomModelClient(ChatCompletionClient):
+    @property
+    def model_info(self):
+        return {
+            "vision": False,
+            "max_tokens": 8000,
+            "context_length": 8000,
+            "model_name": "gpt-4-32k",
+            "function_calling": True,  # Enable function calling
+        }
+
+    async def create(self, messages, **kwargs):
+        import asyncio
+        
+        # Convert tools to OpenAI format if provided
+        tools_param = None
+        if kwargs.get("tools"):
+            tools_param = []
+            for tool in kwargs["tools"]:
+                if callable(tool):
+                    # Convert function to OpenAI tool format
+                    import inspect
+                    sig = inspect.signature(tool)
+                    params = {}
+                    for param_name, param in sig.parameters.items():
+                        params[param_name] = {
+                            "type": "string",  # Simplified - you can enhance this
+                            "description": f"Parameter {param_name}"
+                        }
+                    
+                    tools_param.append({
+                        "type": "function",
+                        "function": {
+                            "name": tool.__name__,
+                            "description": tool.__doc__ or f"Function {tool.__name__}",
+                            "parameters": {
+                                "type": "object",
+                                "properties": params,
+                                "required": list(params.keys())
+                            }
+                        }
+                    })
+        
+        # Call your custom LLM with tools
+        result = await asyncio.to_thread(custom_llm, messages, tools=tools_param, **kwargs)
+        
+        # Handle tool calls
+        if result.get("tool_calls"):
+            # Process tool calls and return appropriate response
+            tool_call = result["tool_calls"][0]
+            function_name = tool_call["function"]["name"]
+            function_args = json.loads(tool_call["function"]["arguments"])
+            
+            # Find and execute the tool
+            if kwargs.get("tools"):
+                for tool in kwargs["tools"]:
+                    if callable(tool) and tool.__name__ == function_name:
+                        tool_result = tool(**function_args)
+                        # Return tool result
+                        return CreateResult(
+                            content=f"Tool {function_name} executed: {tool_result}",
+                            usage=RequestUsage(
+                                prompt_tokens=result["usage"]["prompt_tokens"],
+                                completion_tokens=result["usage"]["completion_tokens"]
+                            ),
+                            cached=False,
+                            logprobs=None
+                        )
+        
+        return CreateResult(
+            content=result["content"],
+            usage=RequestUsage(
+                prompt_tokens=result["usage"]["prompt_tokens"],
+                completion_tokens=result["usage"]["completion_tokens"]
+            ),
+            cached=False,
+            logprobs=None
+        )
+
+async def main(prompt) -> None:
+    # Use your custom model client
+    model_client = CustomModelClient()
+
+    # Weather function for tool calling
+    def get_weather(location: str) -> str:
+        """Get the weather information for a given location."""
+        return f"The weather in {location} is sunny and 75°F."
+
+    # Create weather assistant with tools
+    weather_assistant = AssistantAgent(
+        name="weather_assistant",
+        system_message="You are a helpful weather assistant. Use the get_weather tool when asked about weather. Reply 'TERMINATE' when done.",
+        model_client=model_client,
+        tools=[get_weather],  # Your tool
+    )
+
+    # Create assistant agent
+    assistant = AssistantAgent(
+        name="assistant",
+        system_message="You are a helpful assistant. Write all code in python. Reply 'TERMINATE' if the task is done.",
+        model_client=model_client,
+    )
+
+    # Create code executor agent
+    code_executor = CodeExecutorAgent(
+        name="code_executor",
+        code_executor=LocalCommandLineCodeExecutor(work_dir="coding"),
+    )
+
+    # Set up termination
+    termination = TextMentionTermination("TERMINATE") | MaxMessageTermination(10)
+
+    # Create group chat
+    group_chat = RoundRobinGroupChat(
+        [weather_assistant], 
+        termination_condition=termination
+    )
+
+    try:
+        # Option 1: Simple run (no streaming)
+        print("=== Running without streaming ===")
+        result = await group_chat.run(task=prompt)
+        print("Final result:", result)
+        
+        print("\n=== Trying with streaming ===")
+        # Option 2: Streaming with Console
+        stream = group_chat.run_stream(task=prompt)
+        await Console(stream)
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    prompt = sys.argv[1] if len(sys.argv) > 1 else "What's the weather in Texas?"
+    asyncio.run(main(prompt))
+
+
+
+
+
+
+
+
+
+
+
+import asyncio
+import sys
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.ui import Console
+from autogen_agentchat.conditions import TextMentionTermination
+
+# Your existing custom client code here...
+class CustomModelClient:
+    # ... your existing code ...
+    pass
+
+async def main(prompt):
+    model_client = CustomModelClient()
+    
+    def get_weather(location: str) -> str:
+        return f"Weather in {location}: sunny, 75°F"
+    
+    agent = AssistantAgent(
+        "weather_agent",
+        model_client=model_client,
+        tools=[get_weather]
+    )
+    
+    team = RoundRobinGroupChat([agent], TextMentionTermination("TERMINATE"))
+    
+    # Try streaming
+    try:
+        stream = team.run_stream(task=prompt)
+        await Console(stream)
+    except:
+        # Fallback to regular run
+        result = await team.run(task=prompt)
+        print(result)
+
+if __name__ == "__main__":
+    prompt = sys.argv[1] if len(sys.argv) > 1 else "What's the weather in Texas?"
+    asyncio.run(main(prompt))
+
+
+
+
+
+
+
+
+import asyncio
 from typing import Any, List, Dict, Optional, Union
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.teams import RoundRobinGroupChat
