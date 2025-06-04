@@ -32,6 +32,283 @@ def custom_llm(messages, **kwargs):
         "modelName": model,
         "modelPayload": {
             "messages": serializable_messages,
+            "temperature": 0.7,  # More creative for story writing
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "max_tokens": 200,  # Shorter responses for clear flow
+        }
+    })
+    
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    
+    response = requests.post(llm_url, headers=headers, data=payload)
+    
+    try:
+        data = response.json()
+        content = data["modelResult"]["choices"][0]["message"]["content"]
+        return {
+            "content": content,
+            "usage": data["modelResult"].get("usage", {"prompt_tokens": 10, "completion_tokens": 10})
+        }
+    except Exception:
+        return {
+            "content": response.text,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 10}
+        }
+
+class CustomModelClient(ChatCompletionClient):
+    def __init__(self):
+        self._total_usage = RequestUsage(prompt_tokens=0, completion_tokens=0)
+        self._actual_usage = RequestUsage(prompt_tokens=0, completion_tokens=0)
+    
+    @property
+    def model_info(self):
+        return {
+            "vision": False,
+            "max_tokens": 8000,
+            "context_length": 8000,
+            "model_name": "gpt-4-32k",
+            "function_calling": True,
+            "json_output": False,
+            "structured_output": False,
+        }
+    
+    @property
+    def capabilities(self):
+        return {
+            "vision": False,
+            "function_calling": True,
+            "json_output": False,
+            "structured_output": False,
+        }
+
+    async def create(self, messages, **kwargs):
+        result = await asyncio.to_thread(custom_llm, messages, **kwargs)
+        
+        usage = RequestUsage(
+            prompt_tokens=result["usage"]["prompt_tokens"],
+            completion_tokens=result["usage"]["completion_tokens"]
+        )
+        self._actual_usage = usage
+        self._total_usage = RequestUsage(
+            prompt_tokens=self._total_usage.prompt_tokens + usage.prompt_tokens,
+            completion_tokens=self._total_usage.completion_tokens + usage.completion_tokens
+        )
+        
+        return CreateResult(
+            content=result["content"],
+            usage=usage,
+            cached=False,
+            logprobs=None,
+            finish_reason="stop"
+        )
+    
+    async def create_stream(self, messages, **kwargs) -> AsyncIterator[str]:
+        result = await self.create(messages, **kwargs)
+        yield result.content
+    
+    @property
+    def actual_usage(self) -> RequestUsage:
+        return self._actual_usage
+    
+    @property
+    def total_usage(self) -> RequestUsage:
+        return self._total_usage
+    
+    @property
+    def remaining_tokens(self) -> int:
+        return max(0, 8000 - self._total_usage.prompt_tokens - self._total_usage.completion_tokens)
+    
+    def count_tokens(self, messages, **kwargs) -> int:
+        total = 0
+        for msg in messages:
+            if hasattr(msg, 'content'):
+                content = msg.content
+            else:
+                content = str(msg)
+            total += len(content.split()) * 1.3
+        return int(total)
+    
+    async def close(self):
+        pass
+
+async def story_writing_demo():
+    """Simple Story Writing Team - Shows Clear RoundRobin Flow"""
+    
+    model_client = CustomModelClient()
+    
+    print("🎭 STORY WRITING TEAM - ROUNDROBIN DEMO")
+    print("=" * 50)
+    print("👥 Team: Writer → Editor → Critic → Writer → Editor → Critic...")
+    print("🎯 Goal: Each agent takes turns to build a story")
+    print("=" * 50)
+    
+    # 📝 Writer - Starts the story and adds content
+    writer = AssistantAgent(
+        "story_writer",
+        system_message="""You are a creative story writer. 
+        - If this is the beginning, start a new story with 2-3 sentences
+        - If continuing, add 2-3 sentences to develop the plot
+        - Keep it engaging and creative
+        - End with 'WRITER_DONE' when you finish your part""",
+        model_client=model_client
+    )
+    
+    # ✏️ Editor - Improves and refines
+    editor = AssistantAgent(
+        "story_editor",
+        system_message="""You are a story editor.
+        - Read the current story
+        - Make 1-2 small improvements or corrections
+        - Add 1-2 sentences to enhance the narrative
+        - End with 'EDITOR_DONE' when finished""",
+        model_client=model_client
+    )
+    
+    # 🎯 Critic - Provides feedback and direction
+    critic = AssistantAgent(
+        "story_critic", 
+        system_message="""You are a story critic.
+        - Briefly comment on the story so far (1 sentence)
+        - Suggest what should happen next (1-2 sentences)
+        - If the story feels complete, say 'STORY_COMPLETE'
+        - Otherwise end with 'CRITIC_DONE'""",
+        model_client=model_client
+    )
+    
+    # 🔄 RoundRobin: Writer → Editor → Critic → Writer → Editor → Critic...
+    team = RoundRobinGroupChat(
+        [writer, editor, critic],
+        TextMentionTermination("STORY_COMPLETE")
+    )
+    
+    print("🚀 Starting Story Creation...")
+    print("📖 Watch each agent take their turn in order!\n")
+    
+    try:
+        # Use streaming to see the flow clearly
+        stream = team.run_stream(task="Let's write a short story about a mysterious door. Start with an intriguing opening!")
+        await Console(stream)
+    except Exception as e:
+        print(f"Streaming failed: {e}")
+        print("Falling back to regular run...")
+        result = await team.run(task="Let's write a short story about a mysterious door. Start with an intriguing opening!")
+        print("\n📚 Final Story Result:")
+        print(result)
+    
+    await model_client.close()
+    print("\n✅ Story Writing Demo Complete!")
+
+async def simple_debate_demo():
+    """Even Simpler Demo - 3 Agents Having a Structured Debate"""
+    
+    model_client = CustomModelClient()
+    
+    print("🗣️ SIMPLE DEBATE DEMO - ROUNDROBIN")
+    print("=" * 40)
+    print("👥 Team: Pro → Con → Judge")
+    print("🎯 Topic: Should AI replace human writers?")
+    print("=" * 40)
+    
+    pro_agent = AssistantAgent(
+        "pro_debater",
+        system_message="""You argue PRO (AI should replace human writers).
+        Give 1-2 strong arguments. Keep it brief.
+        End with 'PRO_ARGUMENT_DONE'""",
+        model_client=model_client
+    )
+    
+    con_agent = AssistantAgent(
+        "con_debater", 
+        system_message="""You argue CON (AI should NOT replace human writers).
+        Give 1-2 strong counter-arguments. Keep it brief.
+        End with 'CON_ARGUMENT_DONE'""",
+        model_client=model_client
+    )
+    
+    judge_agent = AssistantAgent(
+        "judge",
+        system_message="""You are the judge. 
+        Briefly summarize both sides and declare a winner.
+        End with 'DEBATE_FINISHED'""",
+        model_client=model_client
+    )
+    
+    # RoundRobin: Pro → Con → Judge (one round)
+    team = RoundRobinGroupChat(
+        [pro_agent, con_agent, judge_agent],
+        TextMentionTermination("DEBATE_FINISHED")
+    )
+    
+    print("🚀 Starting Debate...")
+    
+    try:
+        stream = team.run_stream(task="Debate: Should AI replace human writers? Each participant make your case!")
+        await Console(stream)
+    except Exception as e:
+        print(f"Streaming failed: {e}")
+        result = await team.run(task="Debate: Should AI replace human writers? Each participant make your case!")
+        print("Final Result:", result)
+    
+    await model_client.close()
+
+async def main():
+    print("🎯 ROUNDROBIN DEMO OPTIONS:")
+    print("1. Story Writing Team (more complex)")
+    print("2. Simple Debate (quick demo)")
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "debate":
+        await simple_debate_demo()
+    else:
+        await story_writing_demo()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+
+
+
+
+import asyncio
+import sys
+import json
+import requests
+from typing import Any, List, Dict, Optional, Union, AsyncIterator
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.ui import Console
+from autogen_agentchat.conditions import TextMentionTermination
+from autogen_core.models import ChatCompletionClient, LLMMessage, CreateResult, RequestUsage
+
+# Your access token
+access_token = "your_access_token_here"
+
+def custom_llm(messages, **kwargs):
+    """Your existing custom LLM function"""
+    serializable_messages = []
+    for m in messages:
+        if isinstance(m, dict):
+            serializable_messages.append(m)
+        else:
+            serializable_messages.append({
+                "role": getattr(m, "role", "user"),
+                "content": getattr(m, "content", str(m))
+            })
+    
+    llm_url = "https://askattapis-orchestration-stage.dev.att.com/api/v1/askatt/question"
+    model = "gpt-4-32k"
+    
+    payload = json.dumps({
+        "domainName": "GenerativeAI",
+        "modelName": model,
+        "modelPayload": {
+            "messages": serializable_messages,
             "temperature": 0,
             "top_p": 1,
             "frequency_penalty": 0,
