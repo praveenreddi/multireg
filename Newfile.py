@@ -1,3 +1,18 @@
+# Replace the try block with this for streaming:
+try:
+    stream = group_chat.run_stream(task=prompt)
+    await Console(stream)
+except Exception as e:
+    print(f"Streaming failed: {e}")
+    # Fallback to regular run
+    result = await group_chat.run(task=prompt)
+    print("Result:", result)
+
+
+
+
+
+
 import asyncio
 import sys
 from autogen_agentchat.agents import AssistantAgent, CodeExecutorAgent
