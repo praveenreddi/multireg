@@ -1,3 +1,203 @@
+import asyncio
+import sys
+import json
+import requests
+from typing import Any, List, Dict, Optional, Union, AsyncIterator
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.ui import Console
+from autogen_agentchat.conditions import TextMentionTermination
+from autogen_core.models import ChatCompletionClient, LLMMessage, CreateResult, RequestUsage
+
+# Your access token
+access_token = "your_access_token_here"
+
+def custom_llm(messages, **kwargs):
+    """Your existing custom LLM function"""
+    serializable_messages = []
+    for m in messages:
+        if isinstance(m, dict):
+            serializable_messages.append(m)
+        else:
+            serializable_messages.append({
+                "role": getattr(m, "role", "user"),
+                "content": getattr(m, "content", str(m))
+            })
+    
+    llm_url = "https://askattapis-orchestration-stage.dev.att.com/api/v1/askatt/question"
+    model = "gpt-4-32k"
+    
+    payload = json.dumps({
+        "domainName": "GenerativeAI",
+        "modelName": model,
+        "modelPayload": {
+            "messages": serializable_messages,
+            "temperature": 0,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "max_tokens": 800,
+        }
+    })
+    
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    
+    response = requests.post(llm_url, headers=headers, data=payload)
+    
+    try:
+        data = response.json()
+        content = data["modelResult"]["choices"][0]["message"]["content"]
+        return {
+            "content": content,
+            "usage": data["modelResult"].get("usage", {"prompt_tokens": 10, "completion_tokens": 10})
+        }
+    except Exception:
+        return {
+            "content": response.text,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 10}
+        }
+
+class CustomModelClient(ChatCompletionClient):
+    def __init__(self):
+        self._total_usage = RequestUsage(prompt_tokens=0, completion_tokens=0)
+        self._actual_usage = RequestUsage(prompt_tokens=0, completion_tokens=0)
+    
+    @property
+    def model_info(self):
+        """REQUIRED: Define model capabilities"""
+        return {
+            "vision": False,
+            "max_tokens": 8000,
+            "context_length": 8000,
+            "model_name": "gpt-4-32k",
+            "function_calling": True,
+            "json_output": False,
+            "structured_output": False,
+        }
+    
+    @property
+    def capabilities(self):
+        """REQUIRED: Define model capabilities"""
+        return {
+            "vision": False,
+            "function_calling": True,
+            "json_output": False,
+            "structured_output": False,
+        }
+
+    async def create(self, messages, **kwargs):
+        """Create completion using your custom API"""
+        # Call your custom LLM
+        result = await asyncio.to_thread(custom_llm, messages, **kwargs)
+        
+        # Update usage tracking
+        usage = RequestUsage(
+            prompt_tokens=result["usage"]["prompt_tokens"],
+            completion_tokens=result["usage"]["completion_tokens"]
+        )
+        self._actual_usage = usage
+        self._total_usage = RequestUsage(
+            prompt_tokens=self._total_usage.prompt_tokens + usage.prompt_tokens,
+            completion_tokens=self._total_usage.completion_tokens + usage.completion_tokens
+        )
+        
+        # Check if this is a weather-related query and handle manually
+        content = result["content"]
+        if any(word in content.lower() for word in ["weather", "temperature", "climate"]):
+            location = "Texas"  # Default or extract from messages
+            if kwargs.get("tools"):
+                for tool in kwargs["tools"]:
+                    if callable(tool) and "weather" in tool.__name__.lower():
+                        weather_result = tool(location)
+                        content = f"{content}\n\n{weather_result}"
+        
+        # FIXED: Include all required fields for CreateResult
+        return CreateResult(
+            content=content,
+            usage=usage,
+            cached=False,
+            logprobs=None,
+            finish_reason="stop"  # This was missing!
+        )
+    
+    async def create_stream(self, messages, **kwargs) -> AsyncIterator[str]:
+        """Create streaming completion"""
+        result = await self.create(messages, **kwargs)
+        yield result.content
+    
+    @property
+    def actual_usage(self) -> RequestUsage:
+        """Return actual usage stats"""
+        return self._actual_usage
+    
+    @property
+    def total_usage(self) -> RequestUsage:
+        """Return total usage stats"""
+        return self._total_usage
+    
+    @property
+    def remaining_tokens(self) -> int:
+        """Return remaining tokens"""
+        return max(0, 8000 - self._total_usage.prompt_tokens - self._total_usage.completion_tokens)
+    
+    def count_tokens(self, messages, **kwargs) -> int:
+        """Count tokens in messages"""
+        total = 0
+        for msg in messages:
+            if hasattr(msg, 'content'):
+                content = msg.content
+            else:
+                content = str(msg)
+            total += len(content.split()) * 1.3
+        return int(total)
+    
+    async def close(self):
+        """Close any connections"""
+        pass
+
+async def main(prompt):
+    model_client = CustomModelClient()
+    
+    def get_weather(location: str) -> str:
+        """Get weather information for a location"""
+        return f"Weather in {location}: sunny, 75°F"
+    
+    agent = AssistantAgent(
+        "weather_agent",
+        system_message="You are a helpful weather assistant. When asked about weather, provide the information and then say TERMINATE.",
+        model_client=model_client,
+        tools=[get_weather]
+    )
+    
+    team = RoundRobinGroupChat([agent], TextMentionTermination("TERMINATE"))
+    
+    # Try streaming
+    try:
+        print("=== Trying streaming ===")
+        stream = team.run_stream(task=prompt)
+        await Console(stream)
+    except Exception as e:
+        print(f"Streaming failed: {e}")
+        # Fallback to regular run
+        print("=== Fallback to regular run ===")
+        try:
+            result = await team.run(task=prompt)
+            print("Result:", result)
+        except Exception as e2:
+            print(f"Regular run failed: {e2}")
+    
+    await model_client.close()
+
+if __name__ == "__main__":
+    prompt = sys.argv[1] if len(sys.argv) > 1 else "What's the weather in Texas?"
+    asyncio.run(main(prompt))
+
+
+
+
 
 import asyncio
 import sys
