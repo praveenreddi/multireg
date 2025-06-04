@@ -1,3 +1,39 @@
+import asyncio
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+async def main():
+    # Minimal configuration
+    model_client = OpenAIChatCompletionClient(
+        model="gpt-4-32k",
+        api_key="your_access_token_here",
+        base_url="https://askattapis-orchestration-stage.dev.att.com/api/v1"
+    )
+
+    # Simple agent without tools first
+    agent = AssistantAgent(
+        name="assistant",
+        system_message="You are a helpful assistant.",
+        model_client=model_client,
+    )
+
+    team = RoundRobinGroupChat([agent])
+    
+    try:
+        result = await team.run(task="Say hello and tell me about the weather.")
+        print("Success:", result)
+    except Exception as e:
+        print("Error:", e)
+        import traceback
+        traceback.print_exc()
+    
+    await model_client.close()
+
+asyncio.run(main())
+
+
+
 # Replace the try block with this for streaming:
 try:
     stream = group_chat.run_stream(task=prompt)
