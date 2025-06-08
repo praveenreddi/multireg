@@ -1,191 +1,37 @@
 import asyncio
 import json
 import requests
-import re
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.conditions import MaxMessageTermination
 from autogen_core.models import ChatCompletionClient, CreateResult, RequestUsage
 
-class IntelligentClient(ChatCompletionClient):
-    """Pure LLM intelligence - no keywords, just smart decisions"""
+class SimpleToolClient(ChatCompletionClient):
+    """Simple client focused ONLY on tool testing"""
     
     @property
     def model_info(self):
-        return {
-            "vision": False,
-            "max_tokens": 8000,
-            "context_length": 8000,
-            "model_name": "gpt-4-32k",
-            "function_calling": True,
-            "json_output": False,
-            "structured_output": False,
-        }
+        return {"function_calling": True, "max_tokens": 8000}
     
     @property
     def capabilities(self):
-        """Required abstract method - define model capabilities"""
-        return {
-            "vision": False,
-            "function_calling": True,
-            "json_output": False,
-            "structured_output": False,
-        }
+        return {"function_calling": True}
     
     async def create(self, messages, **kwargs):
-        tools = kwargs.get("tools", [])
-        
-        if tools:
-            # Let LLM decide intelligently
-            enhanced_messages = self.add_smart_instructions(messages, tools)
-            result = self.call_your_api(enhanced_messages)
-            
-            # Check if LLM decided to use a tool
-            tool_result = self.parse_and_execute_tool(result, tools)
-            if tool_result:
-                return tool_result
-        
-        # Regular response
-        result = self.call_your_api(messages)
-        return CreateResult(
-            content=result["content"],
-            usage=RequestUsage(prompt_tokens=10, completion_tokens=10)
-        )
-    
-    def add_smart_instructions(self, messages, tools):
-        """Give LLM clear instructions about available tools"""
-        
-        # Build tool descriptions
-        tool_descriptions = []
-        for tool in tools:
-            if callable(tool):
-                import inspect
-                sig = inspect.signature(tool)
-                params = list(sig.parameters.keys())
-                tool_descriptions.append(
-                    f"- {tool.__name__}({', '.join(params)}): {tool.__doc__ or 'Available function'}"
-                )
-        
-        system_message = f"""You are a helpful assistant with access to these functions:
-
-{chr(10).join(tool_descriptions)}
-
-When a user asks something that can be answered using one of these functions, respond with:
-CALL: function_name(parameter1, parameter2, ...)
-
-For example:
-- CALL: get_weather(Texas)
-- CALL: calculate_sum(15, 25)
-- CALL: send_email(john@example.com, Hello there)
-
-If the question doesn't need any function, respond normally.
-Use your intelligence to decide when functions are needed."""
-        
-        # Convert messages
-        enhanced = []
-        for msg in messages:
-            enhanced.append({
-                "role": getattr(msg, "role", "user"),
-                "content": getattr(msg, "content", str(msg))
-            })
-        
-        # Add system instruction
-        enhanced.insert(0, {"role": "system", "content": system_message})
-        return enhanced
-    
-    def parse_and_execute_tool(self, result, tools):
-        """Parse LLM response and execute tool if requested"""
-        
-        content = result["content"]
-        
-        # Look for CALL: pattern
-        call_match = re.search(r'CALL:\s*(\w+)\((.*?)\)', content, re.IGNORECASE)
-        
-        if call_match:
-            function_name = call_match.group(1)
-            parameters_str = call_match.group(2)
-            
-            print(f"🧠 LLM decided to call: {function_name}")
-            print(f"🔧 Parameters: {parameters_str}")
-            
-            # Find the function
-            target_function = None
-            for tool in tools:
-                if callable(tool) and tool.__name__ == function_name:
-                    target_function = tool
-                    break
-            
-            if target_function:
-                try:
-                    # Parse parameters
-                    params = self.parse_parameters(parameters_str)
-                    
-                    # Execute function
-                    print(f"⚡ Executing: {function_name}({params})")
-                    result = target_function(*params)
-                    print(f"✅ Result: {result}")
-                    
-                    return CreateResult(
-                        content=result,
-                        usage=RequestUsage(prompt_tokens=10, completion_tokens=10),
-                        finish_reason="tool_calls"
-                    )
-                    
-                except Exception as e:
-                    print(f"❌ Execution error: {e}")
-                    return CreateResult(
-                        content=f"Function execution failed: {e}",
-                        usage=RequestUsage(prompt_tokens=10, completion_tokens=10)
-                    )
-        
-        return None
-    
-    def parse_parameters(self, params_str):
-        """Parse function parameters from string"""
-        if not params_str.strip():
-            return []
-        
-        # Simple parameter parsing
-        params = []
-        raw_params = [p.strip().strip('"\'') for p in params_str.split(',')]
-        
-        for param in raw_params:
-            if param:
-                params.append(param)
-        
-        return params
-    
-    def call_your_api(self, messages):
-        """Your API call"""
-        payload = {
-            "domainName": "GenerativeAI",
-            "modelName": "gpt-4-32k",
-            "modelPayload": {
-                "messages": messages,
-                "temperature": 0,
-                "max_tokens": 800
-            }
-        }
-        
-        headers = {
-            'Authorization': 'Bearer your_token_here',
-            'Content-Type': 'application/json'
-        }
-        
+        """Simple create - just return a basic response"""
         try:
-            response = requests.post(
-                "https://your-api-url.com/question",
-                headers=headers,
-                data=json.dumps(payload),
-                timeout=30
+            # For tool testing, return a simple response
+            return CreateResult(
+                content="I'll help you with that.",
+                usage=RequestUsage(prompt_tokens=10, completion_tokens=10)
             )
-            
-            data = response.json()
-            return {"content": data["modelResult"]["choices"][0]["message"]["content"]}
         except Exception as e:
-            return {"content": f"API Error: {e}"}
+            return CreateResult(
+                content=f"Error: {e}",
+                usage=RequestUsage(prompt_tokens=10, completion_tokens=10)
+            )
     
-    # ALL Required abstract methods
+    # Required methods (minimal)
     async def create_stream(self, messages, **kwargs):
         result = await self.create(messages, **kwargs)
         yield result.content
@@ -208,172 +54,80 @@ Use your intelligence to decide when functions are needed."""
     async def close(self):
         pass
 
-# Define your tools
-def get_weather(location):
-    """Get current weather information for any location"""
-    weather_data = {
-        "texas": "The weather in Texas is sunny and 75°F with light winds.",
-        "california": "The weather in California is partly cloudy and 68°F.",
-        "new york": "The weather in New York is rainy and 62°F.",
-        "florida": "The weather in Florida is humid and 82°F with thunderstorms.",
-        "london": "The weather in London is foggy and 55°F."
-    }
-    return weather_data.get(location.lower(), f"The weather in {location} is pleasant today.")
+# Your tools for testing
+def get_weather(location: str) -> str:
+    """Get weather for a location"""
+    print(f"🔧 TOOL CALLED: get_weather(location='{location}')")
+    return f"The weather in {location} is sunny and 75°F."
 
-def calculate_sum(a, b):
-    """Calculate the sum of two numbers"""
+def calculate_sum(a: str, b: str) -> str:
+    """Add two numbers"""
+    print(f"🔧 TOOL CALLED: calculate_sum(a='{a}', b='{b}')")
     try:
         result = float(a) + float(b)
         return f"The sum of {a} and {b} is {result}"
     except:
-        return "Please provide valid numbers for calculation."
+        return "Invalid numbers"
 
-def send_email(recipient, message):
-    """Send an email to someone (simulated)"""
-    return f"Email sent to {recipient} with message: '{message}'"
+def send_message(recipient: str, message: str) -> str:
+    """Send a message"""
+    print(f"🔧 TOOL CALLED: send_message(recipient='{recipient}', message='{message}')")
+    return f"Message sent to {recipient}: '{message}'"
 
-def get_time():
-    """Get current time"""
-    from datetime import datetime
-    return f"Current time is {datetime.now().strftime('%H:%M:%S')}"
-
-# Test the intelligent system
-async def test_intelligent_tools():
-    client = IntelligentClient()
+# Test ONLY tool functionality
+async def test_tools_only():
+    """Test if tools are being registered and called"""
     
+    print("🎯 TESTING TOOL FUNCTIONALITY ONLY")
+    print("=" * 50)
+    
+    client = SimpleToolClient()
+    
+    # Create assistant WITH tools
     assistant = AssistantAgent(
-        name="smart_assistant",
-        system_message="You are a helpful assistant. Use available tools when appropriate.",
+        name="tool_tester",
+        system_message="You are a tool testing assistant.",
         model_client=client,
-        tools=[get_weather, calculate_sum, send_email, get_time]
+        tools=[get_weather, calculate_sum, send_message]  # ← TOOLS HERE
     )
     
-    # Test various queries
-    test_queries = [
-        "What's the weather like in London?",
-        "What's 127 plus 384?", 
-        "Hello, how are you today?",
-        "What time is it?"
-    ]
+    print(f"✅ Assistant created with {len(assistant.tools)} tools")
     
-    for query in test_queries:
-        print(f"\n🎯 Query: '{query}'")
-        print("=" * 50)
-        
+    # List the tools
+    if hasattr(assistant, 'tools') and assistant.tools:
+        print("📋 Registered tools:")
+        for i, tool in enumerate(assistant.tools, 1):
+            if hasattr(tool, '__name__'):
+                print(f"   {i}. {tool.__name__}")
+            else:
+                print(f"   {i}. {tool}")
+    else:
+        print("❌ No tools found!")
+    
+    # Try to manually call a tool (direct test)
+    print("\n🔧 MANUAL TOOL TEST:")
+    try:
+        result = get_weather("Texas")
+        print(f"✅ Manual call successful: {result}")
+    except Exception as e:
+        print(f"❌ Manual call failed: {e}")
+    
+    # Test with AutoGen team
+    print("\n🤖 AUTOGEN TEAM TEST:")
+    try:
         team = RoundRobinGroupChat([assistant], MaxMessageTermination(2))
-        result = await team.run(task=query)
+        result = await team.run(task="Test message")
         
         if result.messages:
-            response = result.messages[-1].content
-            print(f"📝 Response: {response}")
+            print(f"✅ Team response: {result.messages[-1].content}")
+        else:
+            print("❌ No team response")
+            
+    except Exception as e:
+        print(f"❌ Team test failed: {e}")
+    
+    print("\n" + "=" * 50)
+    print("🎯 TOOL TEST COMPLETE")
 
 if __name__ == "__main__":
-    asyncio.run(test_intelligent_tools())
-
-
-
-
-
-
-
-
-
-
-
-
-import requests
-import json
-
-def simple_tool_test():
-    """Easiest way to test if your API supports tools"""
-    
-    access_token = "your_access_token_here"
-    llm_url = 
-    
-    # Your normal payload
-    normal_payload = {
-        "domainName": "GenerativeAI",
-        "modelName": "gpt-4-32k",
-        "modelPayload": {
-            "messages": [{"role": "user", "content": "Hello"}],
-            "temperature": 0,
-            "max_tokens": 100
-        }
-    }
-    
-    # Same payload but WITH tools parameter
-    tool_payload = {
-        "domainName": "GenerativeAI",
-        "modelName": "gpt-4-32k",
-        "modelPayload": {
-            "messages": [{"role": "user", "content": "Hello"}],
-            "temperature": 0,
-            "max_tokens": 100,
-            "tools": [{"type": "function", "function": {"name": "test"}}]  # Simple tool
-        }
-    }
-    
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json'
-    }
-    
-    print("🔍 SIMPLE TOOL COMPATIBILITY TEST")
-    print("=" * 40)
-    
-    # Test 1: Normal request (should work)
-    print("1️⃣ Testing normal request...")
-    try:
-        response1 = requests.post(llm_url, headers=headers, data=json.dumps(normal_payload))
-        print(f"   Status: {response1.status_code}")
-        if response1.status_code == 200:
-            print("   ✅ Normal request works")
-        else:
-            print("   ❌ Normal request failed")
-            return
-    except Exception as e:
-        print(f"   ❌ Error: {e}")
-        return
-    
-    # Test 2: Request with tools parameter
-    print("\n2️⃣ Testing with tools parameter...")
-    try:
-        response2 = requests.post(llm_url, headers=headers, data=json.dumps(tool_payload))
-        print(f"   Status: {response2.status_code}")
-        
-        if response2.status_code == 200:
-            print("   ✅ Tools parameter accepted!")
-            
-            # Check response content
-            try:
-                data = response2.json()
-                response_text = str(data).lower()
-                
-                if "tool_call" in response_text or "function" in response_text:
-                    print("   🎉 API SUPPORTS TOOLS!")
-                    return True
-                else:
-                    print("   🤔 Tools parameter accepted but no tool calling in response")
-                    return False
-                    
-            except:
-                print("   ⚠️ Tools parameter accepted but response unclear")
-                return False
-                
-        else:
-            print("   ❌ Tools parameter rejected")
-            print(f"   Response: {response2.text[:200]}...")
-            return False
-            
-    except Exception as e:
-        print(f"   ❌ Error with tools: {e}")
-        return False
-
-# Just run this one function
-result = simple_tool_test()
-
-if result:
-    print("\n🎉 CONCLUSION: Your API supports tool calling!")
-else:
-    print("\n❌ CONCLUSION: Your API does NOT support tool calling")
-    print("💡 You'll need to use OpenAI API or implement workarounds")
+    asyncio.run(test_tools_only())
