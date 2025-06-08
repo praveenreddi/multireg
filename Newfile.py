@@ -12,7 +12,25 @@ class IntelligentClient(ChatCompletionClient):
     
     @property
     def model_info(self):
-        return {"function_calling": True}
+        return {
+            "vision": False,
+            "max_tokens": 8000,
+            "context_length": 8000,
+            "model_name": "gpt-4-32k",
+            "function_calling": True,
+            "json_output": False,
+            "structured_output": False,
+        }
+    
+    @property
+    def capabilities(self):
+        """Required abstract method - define model capabilities"""
+        return {
+            "vision": False,
+            "function_calling": True,
+            "json_output": False,
+            "structured_output": False,
+        }
     
     async def create(self, messages, **kwargs):
         tools = kwargs.get("tools", [])
@@ -128,10 +146,7 @@ Use your intelligence to decide when functions are needed."""
             return []
         
         # Simple parameter parsing
-        # Handle: "Texas", "15, 25", "john@example.com, Hello"
         params = []
-        
-        # Split by comma and clean up
         raw_params = [p.strip().strip('"\'') for p in params_str.split(',')]
         
         for param in raw_params:
@@ -170,7 +185,7 @@ Use your intelligence to decide when functions are needed."""
         except Exception as e:
             return {"content": f"API Error: {e}"}
     
-    # Required methods
+    # ALL Required abstract methods
     async def create_stream(self, messages, **kwargs):
         result = await self.create(messages, **kwargs)
         yield result.content
@@ -222,10 +237,6 @@ def get_time():
     from datetime import datetime
     return f"Current time is {datetime.now().strftime('%H:%M:%S')}"
 
-def search_web(query):
-    """Search the web for information"""
-    return f"Here are the search results for '{query}': [Simulated search results]"
-
 # Test the intelligent system
 async def test_intelligent_tools():
     client = IntelligentClient()
@@ -234,25 +245,20 @@ async def test_intelligent_tools():
         name="smart_assistant",
         system_message="You are a helpful assistant. Use available tools when appropriate.",
         model_client=client,
-        tools=[get_weather, calculate_sum, send_email, get_time, search_web]
+        tools=[get_weather, calculate_sum, send_email, get_time]
     )
     
-    # Test various queries - LLM should intelligently decide
+    # Test various queries
     test_queries = [
-        "What's the weather like in London?",           # Should use get_weather
-        "How is the climate in Texas?",                 # Should use get_weather  
-        "What's 127 plus 384?",                        # Should use calculate_sum
-        "Add 50 and 75",                               # Should use calculate_sum
-        "Send an email to alice@company.com saying meeting at 3pm",  # Should use send_email
-        "What time is it?",                            # Should use get_time
-        "Search for information about Python programming",  # Should use search_web
-        "Hello, how are you today?",                   # Should NOT use any tool
-        "Tell me a joke",                              # Should NOT use any tool
+        "What's the weather like in London?",
+        "What's 127 plus 384?", 
+        "Hello, how are you today?",
+        "What time is it?"
     ]
     
     for query in test_queries:
         print(f"\n🎯 Query: '{query}'")
-        print("=" * 60)
+        print("=" * 50)
         
         team = RoundRobinGroupChat([assistant], MaxMessageTermination(2))
         result = await team.run(task=query)
@@ -260,12 +266,9 @@ async def test_intelligent_tools():
         if result.messages:
             response = result.messages[-1].content
             print(f"📝 Response: {response}")
-        
-        print("-" * 60)
 
 if __name__ == "__main__":
     asyncio.run(test_intelligent_tools())
-
 
 
 
