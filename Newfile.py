@@ -26,42 +26,67 @@ def build_html_table(summaries):
                 </tr>
     """
     
-    for journey, summary in summaries.items():
-        summary_lines = summary.split('\n')[2:]
-        summary_lines = [line.strip() for line in summary_lines if line.strip()]
-        
-        csat_score = CSAT_SCORES.get(journey, "")
-        
-        rowspan = len(summary_lines) if summary_lines else 1
-        
-        for i, line in enumerate(summary_lines):
-            html += f"""
-                <tr style="background:#1a1a1a;">
-            """
+    # Check if summaries is empty or None
+    if not summaries:
+        html += """
+            <tr style="background:#1a1a1a;">
+                <td colspan="3" style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;text-align:center;">
+                    No data available
+                </td>
+            </tr>
+        """
+    else:
+        for journey, summary in summaries.items():
+            # Handle different summary formats
+            if isinstance(summary, str):
+                # Split summary into lines and clean them
+                summary_lines = [line.strip() for line in summary.split('\n') if line.strip()]
+                # Remove bullet points and empty lines
+                summary_lines = [line.strip('• ').strip() for line in summary_lines if line.strip('• ').strip()]
+                # Skip header lines if they exist
+                if len(summary_lines) > 2 and ('positive' in summary_lines[0].lower() or 'summary' in summary_lines[0].lower()):
+                    summary_lines = summary_lines[2:]
+            else:
+                summary_lines = [str(summary)]
             
-            if i == 0:
+            # Ensure we have at least one line
+            if not summary_lines:
+                summary_lines = ["No summary available"]
+            
+            # Get CSAT score for this journey
+            csat_score = CSAT_SCORES.get(journey, "") if 'CSAT_SCORES' in globals() else ""
+            
+            # Calculate rowspan for the journey cell
+            rowspan = len(summary_lines)
+            
+            for i, line in enumerate(summary_lines):
                 html += f"""
-                    <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;vertical-align:top;text-align:left;" rowspan="{rowspan}">
-                        {journey}
-                    </td>
+                    <tr style="background:#1a1a1a;">
                 """
-            
-            html += f"""
-                    <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;text-align:left;">
-                        {line.strip('• ').strip()}
-                    </td>
-            """
-            
-            if i == 0:
+                
+                if i == 0:
+                    html += f"""
+                        <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;vertical-align:top;text-align:left;" rowspan="{rowspan}">
+                            {journey}
+                        </td>
+                    """
+                
                 html += f"""
-                    <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;text-align:center;vertical-align:top;" rowspan="{rowspan}">
-                        {csat_score}
-                    </td>
+                        <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;text-align:left;">
+                            {line}
+                        </td>
                 """
-            
-            html += """
-                </tr>
-            """
+                
+                if i == 0:
+                    html += f"""
+                        <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;text-align:center;vertical-align:top;" rowspan="{rowspan}">
+                            {csat_score}
+                        </td>
+                    """
+                
+                html += """
+                    </tr>
+                """
     
     html += """
             </table>
