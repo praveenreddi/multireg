@@ -1,133 +1,72 @@
-import asyncio
-import json
-import requests
-from autogen_agentchat.agents import AssistantAgent
-from autogen_agentchat.teams import RoundRobinGroupChat
-from autogen_agentchat.conditions import MaxMessageTermination
-from autogen_core.models import ChatCompletionClient, CreateResult, RequestUsage
-
-class SimpleToolClient(ChatCompletionClient):
-    """Simple client focused ONLY on tool testing"""
+def build_html_table(summaries):
+    html = """
+    <div style="zoom:0.9;-ms-zoom:0.9;-webkit-transform:scale(0.9);-webkit-transform-origin:0 0;">
+        <div style="background:#1a1a1a;padding:20px;margin:0;font-family:'Segoe UI',Arial,sans-serif;">
+            <div style="padding-top:20px;">
+                <div style="font-family:Calibri,sans-serif;font-size:24px;font-weight:bold;color:#fff;text-align:center;letter-spacing:2px;margin-bottom:20px;">
+                    EXECUTIVE SUMMARY
+                </div>
+                <div style="height:15px;"></div>
+                <div style="font-family:'Arial',Arial,sans-serif;font-size:18px;font-weight:bold;color:#fff;text-align:center;text-decoration:underline;margin-bottom:25px;">
+                    <u>Overall Positive Comments across Customer Journeys</u>
+                </div>
+                <div style="height:20px;"></div>
+            </div>
+            <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;border:2px solid #fff;">
+                <tr style="background:#1a1a1a;">
+                    <th style="font-family:'Arial',Arial,sans-serif;font-size:14px;font-weight:bold;color:#fff;border:2px solid #fff;padding:12px 8px;text-align:left;width:15%;">
+                        Journey
+                    </th>
+                    <th style="font-family:'Arial',Arial,sans-serif;font-size:14px;font-weight:bold;color:#fff;border:2px solid #fff;padding:12px 8px;text-align:left;width:65%;">
+                        Positive Summary
+                    </th>
+                    <th style="font-family:'Arial',Arial,sans-serif;font-size:14px;font-weight:bold;color:#fff;border:2px solid #fff;padding:12px 8px;text-align:center;width:20%;">
+                        CSAT Score
+                    </th>
+                </tr>
+    """
     
-    @property
-    def model_info(self):
-        return {"function_calling": True, "max_tokens": 8000}
-    
-    @property
-    def capabilities(self):
-        return {"function_calling": True}
-    
-    async def create(self, messages, **kwargs):
-        """Simple create - just return a basic response"""
-        try:
-            # For tool testing, return a simple response
-            return CreateResult(
-                content="I'll help you with that.",
-                usage=RequestUsage(prompt_tokens=10, completion_tokens=10)
-            )
-        except Exception as e:
-            return CreateResult(
-                content=f"Error: {e}",
-                usage=RequestUsage(prompt_tokens=10, completion_tokens=10)
-            )
-    
-    # Required methods (minimal)
-    async def create_stream(self, messages, **kwargs):
-        result = await self.create(messages, **kwargs)
-        yield result.content
-    
-    @property
-    def actual_usage(self):
-        return RequestUsage(prompt_tokens=0, completion_tokens=0)
-    
-    @property
-    def total_usage(self):
-        return RequestUsage(prompt_tokens=0, completion_tokens=0)
-    
-    @property
-    def remaining_tokens(self):
-        return 8000
-    
-    def count_tokens(self, messages, **kwargs):
-        return 100
-    
-    async def close(self):
-        pass
-
-# Your tools for testing
-def get_weather(location: str) -> str:
-    """Get weather for a location"""
-    print(f"🔧 TOOL CALLED: get_weather(location='{location}')")
-    return f"The weather in {location} is sunny and 75°F."
-
-def calculate_sum(a: str, b: str) -> str:
-    """Add two numbers"""
-    print(f"🔧 TOOL CALLED: calculate_sum(a='{a}', b='{b}')")
-    try:
-        result = float(a) + float(b)
-        return f"The sum of {a} and {b} is {result}"
-    except:
-        return "Invalid numbers"
-
-def send_message(recipient: str, message: str) -> str:
-    """Send a message"""
-    print(f"🔧 TOOL CALLED: send_message(recipient='{recipient}', message='{message}')")
-    return f"Message sent to {recipient}: '{message}'"
-
-# Test ONLY tool functionality
-async def test_tools_only():
-    """Test if tools are being registered and called"""
-    
-    print("🎯 TESTING TOOL FUNCTIONALITY ONLY")
-    print("=" * 50)
-    
-    client = SimpleToolClient()
-    
-    # Create assistant WITH tools
-    assistant = AssistantAgent(
-        name="tool_tester",
-        system_message="You are a tool testing assistant.",
-        model_client=client,
-        tools=[get_weather, calculate_sum, send_message]  # ← TOOLS HERE
-    )
-    
-    print(f"✅ Assistant created with {len(assistant.tools)} tools")
-    
-    # List the tools
-    if hasattr(assistant, 'tools') and assistant.tools:
-        print("📋 Registered tools:")
-        for i, tool in enumerate(assistant.tools, 1):
-            if hasattr(tool, '__name__'):
-                print(f"   {i}. {tool.__name__}")
-            else:
-                print(f"   {i}. {tool}")
-    else:
-        print("❌ No tools found!")
-    
-    # Try to manually call a tool (direct test)
-    print("\n🔧 MANUAL TOOL TEST:")
-    try:
-        result = get_weather("Texas")
-        print(f"✅ Manual call successful: {result}")
-    except Exception as e:
-        print(f"❌ Manual call failed: {e}")
-    
-    # Test with AutoGen team
-    print("\n🤖 AUTOGEN TEAM TEST:")
-    try:
-        team = RoundRobinGroupChat([assistant], MaxMessageTermination(2))
-        result = await team.run(task="Test message")
+    for journey, summary in summaries.items():
+        summary_lines = summary.split('\n')[2:]
+        summary_lines = [line.strip() for line in summary_lines if line.strip()]
         
-        if result.messages:
-            print(f"✅ Team response: {result.messages[-1].content}")
-        else:
-            print("❌ No team response")
+        csat_score = CSAT_SCORES.get(journey, "")
+        
+        rowspan = len(summary_lines) if summary_lines else 1
+        
+        for i, line in enumerate(summary_lines):
+            html += f"""
+                <tr style="background:#1a1a1a;">
+            """
             
-    except Exception as e:
-        print(f"❌ Team test failed: {e}")
+            if i == 0:
+                html += f"""
+                    <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;vertical-align:top;text-align:left;" rowspan="{rowspan}">
+                        {journey}
+                    </td>
+                """
+            
+            html += f"""
+                    <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;text-align:left;">
+                        {line.strip('• ').strip()}
+                    </td>
+            """
+            
+            if i == 0:
+                html += f"""
+                    <td style="font-family:'Arial',Arial,sans-serif;font-size:12px;font-weight:normal;color:#87CEEB;border:2px solid #fff;padding:12px 8px;text-align:center;vertical-align:top;" rowspan="{rowspan}">
+                        {csat_score}
+                    </td>
+                """
+            
+            html += """
+                </tr>
+            """
     
-    print("\n" + "=" * 50)
-    print("🎯 TOOL TEST COMPLETE")
-
-if __name__ == "__main__":
-    asyncio.run(test_tools_only())
+    html += """
+            </table>
+        </div>
+    </div>
+    """
+    
+    return html
